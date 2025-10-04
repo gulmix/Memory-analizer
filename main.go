@@ -73,6 +73,26 @@ func (d *DarwinMemoryReader) GetProcessList() ([]int, error) {
 	return pids, nil
 }
 
+func (d *DarwinMemoryReader) ReadProcessMemory(pid int) (uint64, error) {
+	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "rss=")
+	output, err := cmd.Output()
+	if err != nil {
+		return 0, err
+	}
+
+	rssStr := strings.TrimSpace(string(output))
+	if rssStr == "" {
+		return 0, fmt.Errorf("Процесс с pid %d не найден", pid)
+	}
+
+	rssKb, err := strconv.ParseUint(rssStr, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+
+	return rssKb * 1024, nil
+}
+
 func (l *LinuxMemoryReader) GetProcessList() ([]int, error) {
 	var pids []int
 
@@ -115,20 +135,26 @@ func isAllDigits(s string) bool {
 func main() {
 	reader := &DarwinMemoryReader{}
 
+	// Получаем список процессов
 	pids, err := reader.GetProcessList()
 	if err != nil {
 		fmt.Printf("Error getting process list: %v\n", err)
 		return
 	}
 
-	fmt.Printf("Found %d processes:\n", len(pids))
-
-	// Выводим первые 5 процессов для примера
+	// Проверяем память первых 3 процессов
 	for i, pid := range pids {
-		if i >= 5 {
+		if i >= 3 {
 			break
 		}
-		fmt.Printf("PID: %d\n", pid)
+
+		memory, err := reader.ReadProcessMemory(pid)
+		if err != nil {
+			fmt.Printf("Error reading memory for PID %d: %v\n", pid, err)
+			continue
+		}
+
+		fmt.Printf("Process %d uses %d bytes (%d MB) of memory\n",
+			pid, memory, memory/(1024*1024))
 	}
-	fmt.Printf("... and %d more processes\n", len(pids)-5)
 }
