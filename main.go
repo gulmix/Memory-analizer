@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -409,22 +412,158 @@ func getShortProcessName(fullName string) string {
 	return baseName
 }
 
+func FormatTable(processes []ProcessInfo) string {
+	var res strings.Builder
+	res.WriteString("Process List:\n")
+	res.WriteString("PID      NAME            MEMORY\n")
+	res.WriteString("--------------------------------\n")
+	for _, process := range processes {
+		pidStr := fmt.Sprintf("%d", process.PID)
+		if len(pidStr) > 8 {
+			pidStr = pidStr[:8]
+		} else {
+			pidStr = pidStr + strings.Repeat(" ", 8-len(pidStr))
+		}
+		name := getShortProcessName(process.Name)
+		if len(name) > 15 {
+			name = name[:15]
+		} else {
+			name = name + strings.Repeat(" ", 15-len(name))
+		}
+		memoryStr := FormatMemorySize(process.MemoryUsage)
+		if len(memoryStr) > 10 {
+			memoryStr = memoryStr[:10]
+		} else {
+			memoryStr = strings.Repeat(" ", 10-len(memoryStr)) + memoryStr
+		}
+		res.WriteString(pidStr)
+		res.WriteString(" ")
+		res.WriteString(name)
+		res.WriteString(" ")
+		res.WriteString(memoryStr)
+		res.WriteString("\n")
+	}
+	return res.String()
+}
+
+func FormatSystemStats(stats SystemMemoryInfo) string {
+	var res strings.Builder
+	res.WriteString("System Memory:\n")
+	totalStr := FormatMemorySize(stats.TotalMemory)
+	res.WriteString(fmt.Sprintf("Total:     %s\n", totalStr))
+
+	usedMemory := stats.TotalMemory - stats.AvailableMemory
+	usedStr := FormatMemorySize(usedMemory)
+	usedPercent := float64(usedMemory) / float64(stats.TotalMemory) * 100
+	res.WriteString(fmt.Sprintf("Used:      %s (%.1f%%)\n", usedStr, usedPercent))
+
+	availableStr := FormatMemorySize(stats.AvailableMemory)
+	res.WriteString(fmt.Sprintf("Available: %s\n", availableStr))
+
+	swapUsed := stats.SwapTotal - stats.SwapFree
+	swapUsedStr := FormatMemorySize(swapUsed)
+	swapPercent := float64(swapUsed) / float64(stats.SwapTotal) * 100
+	res.WriteString(fmt.Sprintf("Swap Used: %s (%.1f%%)\n", swapUsedStr, swapPercent))
+	return res.String()
+}
+
+func DisplayDashboard(stats SystemMemoryInfo, processes []ProcessInfo, config DisplayConfig) {
+	var res strings.Builder
+	res.WriteString("=== Memory Analyzer ===\n\n")
+
+	res.WriteString(FormatSystemStats(stats))
+	res.WriteString("\n")
+
+	res.WriteString("Top Memory Processes:\n")
+
+	res.WriteString(FormatTable(processes))
+	res.WriteString("\n")
+
+	currentTime := time.Now().Format("2006-01-02 15:04:05")
+	res.WriteString(fmt.Sprintf("Updated: %s\n", currentTime))
+
+	res.WriteString("Press Ctrl+C to exit\n")
+
+	fmt.Print(res.String())
+}
+
+func getProcName(pid int) string {
+	switch pid {
+	case 1234, 1001:
+		return "chrome"
+	case 5678, 2002:
+		return "vscode"
+	case 9101, 3003:
+		return "terminal"
+	default:
+		return fmt.Sprintf("process-%d", pid)
+	}
+}
+
 func main() {
-	// Тестовые имена процессов
-	testNames := []string{
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		"/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
-		"/System/Library/CoreServices/WindowServer",
-		"/usr/libexec/kafkactl-agent-helper (Renderer)",
-		"very-long-process-name-that-needs-truncating",
+	var reader MemoryReader
+	switch runtime.GOOS {
+	case "darwin":
+		reader = &DarwinMemoryReader{}
+	case "linux":
+		reader = &LinuxMemoryReader{}
+	default:
+		fmt.Printf("Unsupported operating system: %s\n", runtime.GOOS)
+		return
 	}
 
-	fmt.Println("Process Name Formatting Examples:")
-	fmt.Println("Original Name -> Shortened Name")
-	fmt.Println("---------------------------------")
+	// Создание конфигурации
+	config := DisplayConfig{
+		UpdateInterval: 3 * time.Second,
+		TopProcesses:   10,
+	}
 
-	for _, name := range testNames {
-		shortened := getShortProcessName(name)
-		fmt.Printf("%s -> %s\n", name, shortened)
+	// Настройка обработки сигналов
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Создание ticker
+	ticker := time.NewTicker(config.UpdateInterval)
+	defer ticker.Stop()
+
+	fmt.Printf("Starting Memory Analyzer on %s\n", runtime.GOOS)
+
+	// Основной цикл
+	for {
+		select {
+		case <-sigChan:
+			fmt.Println("\nReceived interrupt signal. Exiting...")
+			return
+		case <-ticker.C:
+			// Получение системной информации
+			sysInfo, err := reader.ReadSystemMemory()
+			if err != nil {
+				fmt.Printf("Error reading system memory: %v\n", err)
+				continue
+			}
+
+			// Получение списка процессов
+			pids, err := reader.GetProcessList()
+			if err != nil {
+				fmt.Printf("Error getting process list: %v\n", err)
+				continue
+			}
+
+			// Сбор информации о процессах
+			var processes []ProcessInfo
+			for _, pid := range pids {
+				if mem, err := reader.ReadProcessMemory(pid); err == nil {
+					name := getProcName(pid)
+					processes = append(processes, ProcessInfo{
+						PID:         pid,
+						Name:        name,
+						MemoryUsage: mem,
+					})
+				}
+			}
+
+			// Отображение информационной панели
+			DisplayDashboard(sysInfo, processes, config)
+		}
 	}
 }
