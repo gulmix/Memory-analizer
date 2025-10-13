@@ -45,13 +45,3 @@ cd memory-analyzer
 make build
 ./memory-analyzer
 ```
-
-## 📁 Структура проекта
-
-### memory-analyzer/
-### ├── main.go                 # Основной файл
-### ├── go.mod                  # Модуль Go
-### ├── go.sum                  # Контрольные суммы
-### ├── Makefile                # Автоматизация сборки
-### ├── .gitignore              # Игнорируемые файлы
-### └── README.md               # Документация
