@@ -36,12 +36,15 @@ brew install go
 
 # Ubuntu/Debian  
 sudo apt install golang-go
+```
 
 ### 2. Установите Memory Analyzer
+```bash
 git clone https://github.com/gulmix/memory-analyzer.git
 cd memory-analyzer
 make build
 ./memory-analyzer
+```
 
 ## 📁 Структура проекта
 memory-analyzer/
